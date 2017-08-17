@@ -97,20 +97,20 @@ class Model:
                 self.W1_sub = tf.get_variable(name='W1_sub', shape=[3, 3, 1, 20], dtype=tf.float32, initializer=tf.contrib.layers.variance_scaling_initializer())
                 self.L1_sub = tf.nn.conv2d(input=X_img, filter=self.W1_sub, strides=[1, 1, 1, 1], padding='VALID')  # 126x126 -> 122x122
                 self.L1_sub = self.batch_norm(input=self.L1_sub, shape=20, training=self.training, convl=True, name='Conv1_sub_BN')
-                self.L1_sub = tf.nn.tanh(self.L1_sub, 'R1_sub')
-                # self.L1_sub = self.parametric_relu(self.L1_sub, 'R1_sub')
+                # self.L1_sub = tf.nn.tanh(self.L1_sub, 'R1_sub')
+                self.L1_sub = self.parametric_relu(self.L1_sub, 'R1_sub')
 
                 self.W2_sub = tf.get_variable(name='W2_sub', shape=[3, 3, 20, 20], dtype=tf.float32, initializer=tf.contrib.layers.variance_scaling_initializer())
                 self.L2_sub = tf.nn.conv2d(input=self.L1_sub, filter=self.W2_sub, strides=[1, 1, 1, 1], padding='VALID')  # 122x122 -> 120x120
                 self.L2_sub = self.batch_norm(input=self.L2_sub, shape=20, training=self.training, convl=True, name='Conv2_sub_BN')
-                self.L2_sub = tf.nn.tanh(self.L2_sub, 'R2_sub')
-                # self.L2_sub = self.parametric_relu(self.L2_sub, 'R2_sub')
+                # self.L2_sub = tf.nn.tanh(self.L2_sub, 'R2_sub')
+                self.L2_sub = self.parametric_relu(self.L2_sub, 'R2_sub')
 
                 self.W3_sub = tf.get_variable(name='W3_sub', shape=[3, 3, 20, 20], dtype=tf.float32, initializer=tf.contrib.layers.variance_scaling_initializer())
                 self.L3_sub = tf.nn.conv2d(input=self.L2_sub, filter=self.W3_sub, strides=[1, 1, 1, 1], padding='VALID')  # 122x122 -> 120x120
                 self.L3_sub = self.batch_norm(input=self.L3_sub, shape=20, training=self.training, convl=True, name='Conv3_sub_BN')
-                self.L3_sub = tf.nn.tanh(self.L3_sub, 'R3_sub')
-                # self.L3_sub = self.parametric_relu(self.L3_sub, 'R3_sub')
+                # self.L3_sub = tf.nn.tanh(self.L3_sub, 'R3_sub')
+                self.L3_sub = self.parametric_relu(self.L3_sub, 'R3_sub')
                 ###################################################################################################################
                 ## ▣ Local Response Normalization 구현
                 ##  ⊙ conv 계층과 pool 계층 사이에 넣는 정규화 기법
@@ -233,7 +233,7 @@ class Model:
         ##  ⊙ λ/(2*N)*Σ(W)²-> (0.001/(2*tf.to_float(tf.shape(self.X)[0])))*tf.reduce_sum(tf.square(self.W7))
         ################################################################################################################
         self.cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.Y)) + (0.01/(2*tf.to_float(tf.shape(self.Y)[0])))*tf.reduce_sum(tf.square(self.W_out))
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=0.001).minimize(self.cost)
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=0.01).minimize(self.cost)
         self.accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.arg_max(self.logits, 1), tf.arg_max(self.Y, 1)), dtype=tf.float32))
 
         # self.tensorflow_summary()
@@ -334,20 +334,24 @@ class Model:
     ##  ⊙ Network의 각 층이나 Activation 마다 input_data 의 distribution 을 평균 0, 표준편차 1인 input_data로 정규화시키는 방법
     ##  ⊙ 초기 파라미터 --> beta : 0 , gamma : 1 , decay : 0.5 , epsilon : 0.001
     ####################################################################################################################
-    def batch_norm(self,input, shape, training, convl=True, name='BN'):
-        beta = tf.Variable(tf.constant(0.0, shape=[shape]), name='beta', trainable=True)
-        scale = tf.Variable(tf.constant(1.0, shape=[shape]), name='gamma', trainable=True)
+    def batch_norm(self,input, shape, training, convl=True, name='BN',decay=0.99):
+        beta = tf.Variable(tf.constant(0.0, shape=[shape]), name='beta')
+        scale = tf.Variable(tf.constant(1.0, shape=[shape]), name='scale')
+        pop_mean = tf.Variable(tf.zeros([shape]),trainable=False)
+        pop_var = tf.Variable(tf.ones([shape]),trainable=False)
         if convl:
             batch_mean, batch_var = tf.nn.moments(input, [0, 1, 2], name='moments')
         else:
             batch_mean, batch_var = tf.nn.moments(input, [0], name='moments')
-        ema = tf.train.ExponentialMovingAverage(decay=0.5)
+
+        train_mean = tf.assign(pop_mean,
+                               pop_mean * decay + batch_mean * (1 - decay))
+        train_var = tf.assign(pop_var,
+                               pop_var * decay + batch_var * (1 - decay))
         def mean_var_with_update():
-            ema_apply_op = ema.apply([batch_mean, batch_var])
-            with tf.control_dependencies([ema_apply_op]):
+            with tf.control_dependencies([train_mean,train_var]):
                 return tf.identity(batch_mean), tf.identity(batch_var)
         mean, var = tf.cond(training,
                              mean_var_with_update,
-                            lambda: (ema.average(batch_mean), ema.average(batch_var)),
-                            lambda: (batch_mean,batch_var))
+                            lambda: (pop_mean,pop_var))
         return tf.nn.batch_normalization(input, mean, var, beta, scale, variance_epsilon=1e-3, name=name)
